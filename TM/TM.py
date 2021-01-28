@@ -1,175 +1,139 @@
 #! /usr/bin/python3
 
+import time
 import cmath
+import random
 import numpy as np
 from random import seed
-from random import random
 from scipy import special as sp
-import matplotlib.pyplot as plt
+from numpy import asarray
+from numpy import save
 
 # total cross-section (sum of TE and TM components)
-def total_cs(a,omega,Lambda,eps):
+def total_cs(a,omega,eps):
 
-    sigma = 0
-    for v in range(order):
-        sigma = sigma + SCS(1,v,a,omega,Lambda,eps) + SCS(2,v,a,omega,Lambda,eps)
+    # spherical cross-section
+    def SCS(polarisation,v,a,omega,eps):
 
-    return sigma
+        z      = complex(0,1)
+        M      = TM(polarisation,v,a,omega,eps)
+        r      = ( M[0,0,:] - z*M[1,0,:] )/( M[0,0,:] + z*M[1,0,:] )
+        coef   = (2*v + 1)*np.pi/( omega**2*eps[:,-1] )
+        sigma  = coef * np.abs(1 - r)**2
 
-# spherical cross-section
-def SCS(k,v,a,omega,Lambda,eps):
+        return sigma
 
-    z      = complex(0,1)
-    M      = np.array( TM(k,v,a,omega,eps) )
-    r      = ( M[0,0,:] - z*M[1,0,:] )/( M[0,0,:] + z*M[1,0,:] )
-    sigma  = Lambda**2*abs(1 - r)**2/(8*np.pi)
+    # transfer matrix
+    def TM(polarisation,v,a,omega,eps):
 
-    return sigma
+        def subTM(polarisation,v,a,omega,eps1,eps2):
+            k1   = omega * np.sqrt(eps1)
+            k2   = omega * np.sqrt(eps2)
+            x1   = a * k1
+            x2   = a * k2
 
-# transfer matrix
-def TM(k,v,a,omega,eps):
+            j1   = sp.spherical_jn(v,x1,False)
+            j1d  = sp.spherical_jn(v,x1,True)
+            y1   = sp.spherical_yn(v,x1,False)
+            y1d  = sp.spherical_yn(v,x1,True)
+            j2   = sp.spherical_jn(v,x2,False)
+            j2d  = sp.spherical_jn(v,x2,True)
+            y2   = sp.spherical_yn(v,x2,False)
+            y2d  = sp.spherical_yn(v,x2,True)
 
-    def subTM(k,v,a,omega,eps1,eps2):
-        k1   = omega * np.sqrt(eps1)
-        k2   = omega * np.sqrt(eps2)
-        x1   = a * k1
-        x2   = a * k2
+            if polarisation == 1:
+                m1 = np.array( [[ y2d , -y2 ] , [ -j2d , j2 ]] )
+                m2 = np.array( [[ j1 , y1 ] , [ j1d , y1d ]] )
+            else:
+                m1 = np.array( [[ y2d*eps1 , -y2 ] , [ -j2d*eps1 , j2 ]] )
+                m2 = np.array( [[ j1 , y1 ] , [ j1d*eps2 , y1d*eps2 ]] )
 
-        obj  = bessel()
-        j1   = obj.first(v,x1,False)
-        j1d  = obj.first(v,x1,True)
-        y1   = obj.second(v,x1,False)
-        y1d  = obj.second(v,x1,True)
-        j2   = obj.first(v,x2,False)
-        j2d  = obj.first(v,x2,True)
-        y2   = obj.second(v,x2,False)
-        y2d  = obj.second(v,x2,True)
+            m = product(m1,m2)
 
-        if k == 1:
-            m1 = [ [ y2d , -j2d ] , [ -y2 , j2 ] ]
-            m2 = [ [ j1 , j1d ] , [ y1 , y1d ] ]
-        else:
-            m1 = [ [ y2d*eps1 , -j2d*eps1 ] , [ -y2 , j2 ] ]
-            m2 = [ [ j1 , j1d*eps2 ] , [ y1 , y1d*eps2 ] ]
+            return m
 
-        m1 = np.array(m1)
-        m2 = np.array(m2)
+        M = np.zeros([2,2,N])
+        M[0,0,:] = 1
+        M[1,1,:] = 1
 
-        m = product(m1,m2)
+        a = np.cumsum(a)
+        for layer in range(k):
+            eps1 = eps[:,layer]
+            eps2 = eps[:,layer+1]
+            m = subTM(polarisation,v,a[layer],omega,eps1,eps2)
+            M = product(m,M)
+
+        return M
+
+    # takes the product of two sets of 2x2 matrices with dimentions (2,2,N)
+    def product(m1,m2):
+
+        m = np.array([[ m1[0,0,:]*m2[0,0,:] + m1[0,1,:]*m2[1,0,:] , m1[0,0,:]*m2[0,1,:] + m1[0,1,:]*m2[1,1,:] ] ,
+                      [ m1[1,0,:]*m2[0,0,:] + m1[1,1,:]*m2[1,0,:] , m1[1,0,:]*m2[0,1,:] + m1[1,1,:]*m2[1,1,:] ]])
 
         return m
 
-    M = np.zeros((2,2,N))
-    M[0,0,:] = 1
-    M[1,1,:] = 1
 
-    layers = 8
-    a = np.cumsum(a)
-    for layer in range(layers):
-        eps1 = eps[:,layer]
-        eps2 = eps[:,layer+1]
-        m = subTM(k,v,a[layer],omega,eps1,eps2)
-        M = product(M,m)
+    sigma = 0
+    for v in range(order):
+        sigma = sigma + SCS(1,v,a,omega,eps) + SCS(2,v,a,omega,eps)
 
-    return M
+    return sigma
 
-# takes the product of two sets of 2x2 matrices
-def product(m1,m2):
-
-    m1 = np.array(m1)
-    m2 = np.array(m2)
-    m = [ [ m1[0,0,:]*m2[0,0,:] + m1[0,1,:]*m2[1,0,:] , m1[1,0,:]*m2[0,0,:] + m1[1,1,:]*m2[1,0,:] ] ,
-          [ m1[0,0,:]*m2[0,1,:] + m1[0,1,:]*m2[1,1,:] , m1[1,0,:]*m2[0,1,:] + m1[1,1,:]*m2[1,1,:] ] ]
-
-    return m
-
-# spherical bessel functions of the first and second kind
-class bessel:
-
-    def first(self,order,argument,derivative):
-        return sp.spherical_jn(order,argument,derivative)
-
-    def second(self,order,argument,derivative):
-        return sp.spherical_yn(order,argument,derivative)
 
 # generate random shell thicknesses
 def thicknesses():
 
-    seed(42)
-    a = []
-    for i in range(8):
-        a.append( random() )
+    a = np.empty([1,k], dtype=int)
+    for i in range(k):
+        a[0,i] = random.randrange(30,70)
 
-    r = 40e-9 / np.sum(a)
-    a = np.array(a) * r
     return a
-
-# calculate relative permittivity of TiO2
-def E_TiO2(Lambda):
-    E = 5.913 + 0.2441/( Lambda**2 - 0.0803 )
-    return E
 
 # construct N-by-(k+1) permittivity matrix
 def eps(Lambda):
 
-    array = []
-    for i in range(N):
-        E_s     = 2.04
-        E0      = 8.85418782e-12
-        U0       = 4*np.pi*1e-7
-        row     = []
-        for j in range(8):
-            if (j % 2) == 0:
-                row.append(E_s)
-            else:
-                row.append( E_TiO2(Lambda[i]) )
+    E_S     = 2.04 * np.ones([1,N])
+    E_TiO2  = 5.913 + 0.2441/( (Lambda/1000)**2 - 0.0803 )
 
-        row.append(1)
-        row = np.array( row ) * E0 * U0
-        array.append( row )
-
-    array = np.array( array )
+    array = np.ones([N,k+1])
+    array[:,0], array[:,2], array[:,4], array[:,6] = E_S, E_S, E_S, E_S
+    array[:,1], array[:,3], array[:,5], array[:,7] = E_TiO2, E_TiO2, E_TiO2, E_TiO2
 
     return array
 
-N          = 1000
-order      = 10
-step       = np.float( ( 800-400)/N )
-a          = np.array([48,45,61,62,38,50,48,56]) * 1e-9
-Lambda     = np.arange(400.,800.,step) * 1e-9
-omega      = 2*np.pi*3e8*np.reciprocal( Lambda )
-omega      = np.transpose( omega )
 
-CS = total_cs(a,omega,Lambda,eps(Lambda))
-CS =  CS / (np.pi*np.sum(a)**2)
 
-plt.plot(Lambda,CS)
-plt.title('Cross section including $\mu$')
-plt.xlabel('$\lambda (nm)$')
-plt.ylabel('$\sigma/\pi r^2$')
-step = (800*1e-9 - 400*1e-9)/8
-ticks = ('400', '450', '500', '550', '600', '650', '700', '750', '800')
-plt.xticks(np.arange(400*1e-9, 850*1e-9, step), ticks)
-plt.show()
+lower      = 400                                    # lower limit in nm
+upper      = 800                                    # upper limit in nm
+N          = upper - lower                          # number of data points
+order      = 10                                     # order of bessel function
+k          = 8                                      # number of layers
+Lambda     = np.linspace(lower, upper, N)           # 1D wavelength array
+omega      = 2*np.pi*np.reciprocal( Lambda )        # 1D angular velocity arry
+eps        = eps(Lambda)                            # 2D permittivity array
+seed(42)
 
 
 
+t = time.time()
+
+n       = 50000
+A       = np.empty([n,k], dtype=int)
+spectra = np.empty([n,N])
+for i in range(n):
+
+    a   = thicknesses()
+    CS  = np.array(total_cs(a,omega,eps))
+    CS  = CS / (np.pi*np.sum(a)**2)
+
+    A[i,:]       = a
+    spectra[i,:] = CS
 
 
+# uncomment these to save shell thickness and scattering cross section arrays to file
+#save('../data/thicknesses.npy', A)
+#save('../data/scatter_CS.npy', spectra)
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-print("done")
+t = time.time() - t
+print(t)
